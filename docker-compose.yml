@@ -1,0 +1,129 @@
+---
+version: "3.5"
+
+networks:
+  frontend:
+  backend:
+
+volumes:
+  prometheus_data: {}
+  grafana_data: {}
+  alertmanager_data: {}
+
+services:
+  traefik:
+    image: traefik:v2.1.1
+    command:
+      - "--log.level=DEBUG"
+      - "--api=true"
+      #- "--api.insecure=true"
+      - "--api.dashboard=true"
+      - "--metrics=true"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.http.address=:80"
+      - "--entrypoints.https.address=:443"
+    networks:
+      - frontend
+      - backend
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - 80:80
+      - 443:443
+    #  - 8080:8080
+    labels:
+      #- "traefik.docker.network=traefik"
+      - "traefik.enable=true"
+      # middleware redirect
+      # Create user `echo $(htpasswd -nb username password) | sed -e s/\\$/\\$\\$/g`
+      - "traefik.http.middlewares.myauth.basicauth.users=test:$$apr1$$iW339T.V$$JLkKg65XaYV9v.q9djmO50"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      # Catchall for insecure http traffic
+      - "traefik.http.routers.http-catchall.entrypoints=http"
+      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      # Dashboard
+      - "traefik.http.routers.api.entrypoints=https"
+      - "traefik.http.routers.api.rule=hostregexp(`{host:traefik.+}`)"
+      - "traefik.http.routers.api.service=api@internal"
+      - "traefik.http.routers.api.tls"
+      - "traefik.http.routers.api.middlewares=myauth"
+
+  prometheus:
+    image: ${REGISTRY}prom/prometheus
+    restart: "always"
+    networks:
+      - backend
+    #ports:
+    #  - 9090:9090
+    volumes:
+      - prometheus_data:/prometheus
+      - type: "bind"
+        source: "${CONF_DIR}/prometheus"
+        target: /etc/prometheus/
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prometheus.rule=hostregexp(`{host:prometheus.+}`)"
+      - "traefik.http.routers.prometheus.entrypoints=https"
+      - "traefik.http.routers.prometheus.tls=true"
+      - "traefik.http.routers.prometheus.middlewares=redirect-to-https"
+      - "traefik.http.routers.prometheus.middlewares=myauth"
+
+  alertmanager:
+    image: ${REGISTRY}prom/alertmanager
+    #ports:
+    #  - 9093:9093
+    volumes:
+      - type: "bind"
+        source: "${CONF_DIR}/alertmanager"
+        target: /etc/alertmanager/
+      - alertmanager_data:/alertmanager/
+    networks:
+      - backend
+    restart: always
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+
+  node-exporter:
+    image: ${REGISTRY}prom/node-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - --collector.filesystem.ignored-mount-points
+      - "^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)"
+    #ports:
+    #  - 9100:9100
+    networks:
+      - backend
+    restart: always
+
+  grafana:
+    image: ${REGISTRY}grafana/grafana
+    restart: "always"
+    networks:
+      - backend
+    #ports:
+    #  - "3000:3000"
+    volumes:
+      - type: "bind"
+        source: "${CONF_DIR}/grafana"
+        target: /etc/grafana/
+      - grafana_data:/var/lib/grafana/
+    user: '472'
+    depends_on:
+      - prometheus
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=hostregexp(`{host:grafana.+}`)"
+      - "traefik.http.routers.grafana.entrypoints=https"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.routers.grafana.middlewares=redirect-to-https"
+        #- "traefik.http.routers.grafana.middlewares=myauth"

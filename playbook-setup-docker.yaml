@@ -1,0 +1,161 @@
+---
+- hosts: all
+  become: true
+  tasks:
+    - name: Install epel-release
+      yum:
+        name: epel-release
+        state: present
+
+    - name: Install base packages
+      yum:
+        name: "{{ packages }}"
+        state: present
+        update_cache: "yes"
+      vars:
+        packages:
+          - vim-enhanced
+          - nmap
+          - nmap-ncat
+          - tree
+          - curl
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+          - git
+
+    - name: Add yum repository for Docker stable
+      yum_repository:
+        name: docker-ce-stable
+        description: Docker CE Stable - $basearch
+        baseurl: https://download.docker.com/linux/centos/$releasever/$basearch/stable/
+        gpgcheck: "yes"
+        gpgkey: https://download.docker.com/linux/centos/gpg
+        state: present
+        enabled: "no"
+
+    - name: Install docker
+      yum:
+        name: "{{ packages }}"
+        state: present
+        enablerepo: docker-ce-stable
+      vars:
+        packages:
+          - docker-ce-18.06.1.ce
+      notify:
+        - restart docker
+
+    - name: Create docker etc directory
+      file:
+        path: /etc/docker
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Copy in docker daemon settings
+      copy:
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "100m"
+            },
+            "storage-driver": "overlay2",
+            "storage-opts": [
+              "overlay2.override_kernel_check=true"
+            ]
+          }
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create docker systemd overrides directory
+      file:
+        path: /etc/systemd/system/docker.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Start service docker, if not started
+      service:
+        name: docker
+        daemon_reload: "yes"
+        state: started
+        enabled: "yes"
+
+    - name: Add vagrant user to docker group
+      user:
+        name: vagrant
+        group: docker
+
+    - name: copy in .bashrc
+      copy:
+        src: "{{ lookup('env','HOME') }}/.bashrc"
+        dest: /home/vagrant/
+
+    - name: create .vimrc
+      copy:
+        owner: vagrant
+        dest: /home/vagrant/.vimrc
+        content: |
+          set nocompatible
+
+          set autoindent
+          set autoread
+          set autowrite
+          set expandtab
+          set hlsearch
+          set incsearch
+          set laststatus=2
+          set matchtime=5
+          set modeline
+          set mouse=
+          set mousehide
+          set nolist
+          set nowrap
+          set pastetoggle=<F3>
+          set ruler
+          set shiftround
+          set shiftwidth=4
+          set showcmd
+          set showmatch
+          set smartindent
+          set smarttab
+          set softtabstop=4
+          set tabstop=4
+          set wildmenu
+
+          if empty(glob('~/.vim/autoload/plug.vim'))
+              silent !curl -fLo ~/.vim/autoload/plug.vim --create-dirs
+                  \ https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim
+              autocmd VimEnter * PlugInstall --sync | source $MYVIMRC
+          endif
+
+          call plug#begin('~/.vim/plugged')
+            Plug 'tomasr/molokai'
+          call plug#end()
+
+          if (has("termguicolors"))
+            set termguicolors
+          else
+            set t_Co=256
+          endif
+
+          try
+            colorscheme molokai
+          catch /^Vim\%((\a\+)\)\=:E185/
+            colorscheme default
+          endtry
+
+
+
+  handlers:
+    - name: restart docker
+      service:
+        name: docker
+        state: restarted
+
